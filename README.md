@@ -63,7 +63,7 @@ npx wrangler pages deploy dist --project-name video-watermark-tool
 
 ## 换水印
 
-本分支默认使用“红薯”水印（2026-11-19 提供）：`public/watermark.png`，尺寸为 **720×1280**。保留原图透明通道和上下两处文字，未添加背景、未改变透明度。
+本分支默认使用用户于 2026-11-19 更新的水印：`public/watermark.png`，尺寸为 **480×854**。保留原图透明通道，未添加背景、未改变透明度。
 
 替换 `public/watermark.png` 文件，重新构建部署即可。水印会被自动拉伸到视频的完整分辨率。
 
