@@ -10,7 +10,10 @@ const VIDEO_TYPES = new Set([
   "video/webm",
   "video/x-msvideo",
 ]);
-const watermarkUrl = "/watermark.png";
+const WATERMARKS = {
+  portrait: { label: "竖屏", url: "/竖屏.png" },
+  landscape: { label: "横屏", url: "/横屏.png" },
+};
 
 /* ---- Detect multi-thread support ---- */
 const ua = navigator.userAgent.toLowerCase();
@@ -78,6 +81,27 @@ app.innerHTML = `
         </label>
       </div>
 
+      <div class="watermark-row">
+        <div class="watermark-switch" role="radiogroup" aria-label="水印方向">
+          <span class="watermark-label">水印</span>
+          <label>
+            <input type="radio" name="watermark" value="portrait" checked />
+            <span>竖屏</span>
+          </label>
+          <label>
+            <input type="radio" name="watermark" value="landscape" />
+            <span>横屏</span>
+          </label>
+        </div>
+        <span id="watermark-hint" class="watermark-hint">本批视频使用竖屏水印</span>
+        <details class="watermark-preview" id="watermark-preview">
+          <summary>预览水印</summary>
+          <div class="watermark-preview-frame">
+            <img id="watermark-preview-image" src="/竖屏.png" alt="竖屏水印预览" />
+          </div>
+        </details>
+      </div>
+
       <div class="file-area">
         <div class="section-heading">
           <span>待处理视频</span>
@@ -137,6 +161,41 @@ const settingThreads = document.querySelector("#setting-threads");
 const settingCrf = document.querySelector("#setting-crf");
 const settingAudio = document.querySelector("#setting-audio");
 const engineHint = document.querySelector("#engine-hint");
+const watermarkInputs = [...document.querySelectorAll('input[name="watermark"]')];
+const watermarkHint = document.querySelector("#watermark-hint");
+const watermarkPreviewImage = document.querySelector("#watermark-preview-image");
+let isProcessing = false;
+
+function updateWatermarkSelection() {
+  const selected = watermarkInputs.find((radio) => radio.checked).value;
+  const watermark = WATERMARKS[selected];
+  watermarkHint.textContent = `本批视频使用${watermark.label}水印`;
+  watermarkPreviewImage.src = watermark.url;
+  watermarkPreviewImage.alt = `${watermark.label}水印预览`;
+  try { localStorage.setItem("watermark-orientation", selected); } catch { /* Storage may be unavailable. */ }
+}
+
+try {
+  const saved = localStorage.getItem("watermark-orientation");
+  if (Object.hasOwn(WATERMARKS, saved)) {
+    watermarkInputs.find((radio) => radio.value === saved).checked = true;
+  }
+} catch { /* Keep the default when storage is unavailable. */ }
+watermarkInputs.forEach((radio) => radio.addEventListener("change", updateWatermarkSelection));
+updateWatermarkSelection();
+
+function setProcessing(busy) {
+  isProcessing = busy;
+  startButton.disabled = busy || !files.length;
+  clearButton.disabled = busy;
+  input.disabled = busy;
+  [settingEngine, settingCrf, settingAudio, ...watermarkInputs].forEach((control) => {
+    control.disabled = busy;
+  });
+  settingThreads.disabled = busy || !canUseMT;
+  fileList.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
+  dropZone.classList.toggle("is-processing", busy);
+}
 
 settingEngine.addEventListener("change", (e) => {
   if (e.target.value === "ffmpeg") {
@@ -171,6 +230,7 @@ function isVideo(file) {
 }
 
 function addFiles(newFiles) {
+  if (isProcessing) return;
   for (const file of newFiles) {
     if (isVideo(file) && !files.some((item) => item.name === file.name && item.size === file.size)) {
       files.push(file);
@@ -304,19 +364,34 @@ async function loadFFmpeg() {
   });
 }
 
-let watermarkCached = false;
+const ffmpegWatermarks = new WeakMap();
 
-async function processFile(file, index, total) {
+async function loadWatermark(watermark) {
+  const response = await fetch(watermark.url);
+  if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) {
+    throw new Error(`${watermark.label}水印加载失败，请检查 public/${watermark.label}.png 是否存在。`);
+  }
+  const blob = await response.blob();
+  // Check the image before starting a batch, instead of failing after decoding a video.
+  const bitmap = await createImageBitmap(blob);
+  bitmap.close();
+  return { ...watermark, blob };
+}
+
+async function writeFFmpegWatermark(watermark) {
+  if (ffmpegWatermarks.get(ffmpeg) === watermark.url) return;
+  await ffmpeg.writeFile("watermark.png", await fetchFile(watermark.blob));
+  ffmpegWatermarks.set(ffmpeg, watermark.url);
+}
+
+async function processFile(file, index, total, watermark) {
   const t0 = performance.now();
   const inputName = `input_${index}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
   const outputName = `output_${index}.mp4`;
 
   await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-  if (!watermarkCached) {
-    await ffmpeg.writeFile("watermark.png", await fetchFile(watermarkUrl));
-    watermarkCached = true;
-  }
+  await writeFFmpegWatermark(watermark);
 
   const crfVal = settingCrf.value || "23";
   let threadsVal = "1";
@@ -338,7 +413,8 @@ async function processFile(file, index, total) {
       "-i", inputName,
       "-i", "watermark.png",
       "-filter_complex",
-      "[1:v][0:v]scale2ref=w=main_w:h=main_h[wm][video];[video][wm]overlay=0:0[outv]",
+      // scale2ref's iw/ih are the reference video's size; main_w/main_h are the watermark's own size.
+      "[1:v][0:v]scale2ref=w=iw:h=ih[wm][video];[video][wm]overlay=0:0[outv]",
       "-map", "[outv]",
       "-map", "0:a?",
       "-c:v", "libx264",
@@ -398,7 +474,7 @@ async function processFile(file, index, total) {
   let activeAudioCodec = "直拷";
 
   const updateStatus = (ac) => {
-    status.textContent = `处理中 ${index + 1}/${total}：${file.name} (${threadsDisplay} · CRF${crfVal} · 音频${ac})`;
+    status.textContent = `处理中 ${index + 1}/${total}：${file.name} (${watermark.label}水印 · ${threadsDisplay} · CRF${crfVal} · 音频${ac})`;
   };
 
   if (audioPref === "auto") {
@@ -421,8 +497,7 @@ async function processFile(file, index, total) {
         ffmpeg = new FFmpeg();
         await loadFFmpeg();
         await ffmpeg.writeFile(inputName, await fetchFile(file));
-        await ffmpeg.writeFile("watermark.png", await fetchFile(watermarkUrl));
-        watermarkCached = true;
+        await writeFFmpegWatermark(watermark);
       }
       const retFallback = await executeFFmpegWithWatchdog(getExecArgs("aac"));
       if (retFallback !== 0) {
@@ -448,9 +523,9 @@ async function processFile(file, index, total) {
   status.textContent = `已完成 ${index + 1}/${total}：${file.name}（耗时 ${elapsed}s）`;
 }
 
-async function processWebAV(fileObj, index, total) {
+async function processWebAV(fileObj, index, total, watermark) {
   const t0 = performance.now();
-  status.textContent = `准备中 ${index + 1}/${total}：${fileObj.name} (WebAV 硬件加速)`;
+  status.textContent = `准备中 ${index + 1}/${total}：${fileObj.name} (${watermark.label}水印 · WebAV 硬件加速)`;
   
   if (typeof window.VideoEncoder === "undefined" || typeof window.VideoDecoder === "undefined") {
     throw new Error("当前浏览器不支持 WebCodecs (VideoEncoder/Decoder) 硬件加速 API。建议切换回“FFmpeg WASM”模式，或使用最新版 Chrome/Edge。");
@@ -467,9 +542,7 @@ async function processWebAV(fileObj, index, total) {
   const { width, height } = mp4Clip.meta;
 
   // 2. 初始化水印图片 Clip
-  const imgResp = await fetch(watermarkUrl);
-  const imgBlob = await imgResp.blob();
-  const imgBitmap = await createImageBitmap(imgBlob);
+  const imgBitmap = await createImageBitmap(watermark.blob);
   const imgClip = new ImgClip(imgBitmap);
   await imgClip.ready;
 
@@ -536,7 +609,7 @@ async function processWebAV(fileObj, index, total) {
     progressValue = v;
     lastProgressTime = performance.now();
     setProgress(v * 100);
-    status.textContent = `处理中 ${index + 1}/${total}：${fileObj.name} (GPU硬件加速 · 画质${crfVal} - ${Math.floor(v * 100)}%)`;
+    status.textContent = `处理中 ${index + 1}/${total}：${fileObj.name} (${watermark.label}水印 · GPU硬件加速 · 画质${crfVal} - ${Math.floor(v * 100)}%)`;
   });
 
   com.on("error", (err) => {
@@ -567,17 +640,18 @@ async function processWebAV(fileObj, index, total) {
 
 async function startProcessing() {
   if (!files.length || startButton.disabled) return;
-  startButton.disabled = true;
-  clearButton.disabled = true;
-  input.disabled = true;
+  setProcessing(true);
   errorCard.style.display = "none";
   errorSummary.textContent = "";
   errorLogContent.textContent = "";
   setProgress(0);
   
   const engine = settingEngine.value;
+  const selectedWatermark = WATERMARKS[watermarkInputs.find((radio) => radio.checked).value];
 
   try {
+    status.textContent = `正在加载${selectedWatermark.label}水印…`;
+    const watermark = await loadWatermark(selectedWatermark);
     if (engine === "ffmpeg") {
       await loadFFmpeg();
     }
@@ -585,9 +659,9 @@ async function startProcessing() {
     
     for (let index = 0; index < files.length; index += 1) {
       if (engine === "webav") {
-        await processWebAV(files[index], index, files.length);
+        await processWebAV(files[index], index, files.length, watermark);
       } else {
-        await processFile(files[index], index, files.length);
+        await processFile(files[index], index, files.length, watermark);
       }
     }
     
@@ -628,9 +702,7 @@ async function startProcessing() {
     errorCard.style.display = "block";
     errorCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } finally {
-    startButton.disabled = !files.length;
-    clearButton.disabled = false;
-    input.disabled = false;
+    setProcessing(false);
   }
 }
 

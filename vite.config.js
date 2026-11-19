@@ -1,6 +1,10 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  optimizeDeps: {
+    // Preserve FFmpeg's relative worker URL during local development.
+    exclude: ["@ffmpeg/ffmpeg"],
+  },
   worker: {
     format: "es",
   },

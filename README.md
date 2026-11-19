@@ -14,7 +14,8 @@ logoadder/
 │   └── style.css           # 样式
 ├── public/
 │   ├── _headers            # Cloudflare Pages HTTP 头（COOP/COEP）
-│   └── watermark.png       # 水印图片（替换这个文件即可换水印）
+│   ├── 竖屏.png             # 竖屏水印
+│   └── 横屏.png             # 横屏水印
 ├── scripts/
 │   └── copy-ffmpeg-core.mjs # 构建前复制 FFmpeg 核心文件
 ├── vite.config.js          # Vite 配置
@@ -63,9 +64,14 @@ npx wrangler pages deploy dist --project-name video-watermark-tool
 
 ## 换水印
 
-本分支默认使用用户于 2026-11-19 更新的水印：`public/watermark.png`，尺寸为 **480×854**。保留原图透明通道，未添加背景、未改变透明度。
+在处理设置下方选择 **竖屏** 或 **横屏**，本批视频统一使用所选水印；可展开 **预览水印** 查看图片。下次打开网页会记住上次选择，默认使用竖屏。
 
-替换 `public/watermark.png` 文件，重新构建部署即可。水印会被自动拉伸到视频的完整分辨率。
+两种处理引擎（WebAV、FFmpeg）均支持切换。处理中会锁定水印和其他设置，避免同一批次中途更改。
+
+- `public/竖屏.png`：480×854，原有竖屏水印。
+- `public/横屏.png`：1920×1080，用户提供的横屏水印。
+
+两张图片均保留原图透明通道，未添加背景、未改变透明度。替换相应 PNG 文件，重新构建部署即可。水印会覆盖视频完整画面，视频方向、分辨率和输出命名保持不变。
 
 ## 限制
 
