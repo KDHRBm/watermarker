@@ -1,6 +1,8 @@
-# 视频样片水印工具（Cloudflare Pages）
+# 视频样片水印工具（Cloudflare Workers / Pages）
 
-纯前端网页应用。视频不会上传服务器，FFmpeg 在浏览器中本地运行。Cloudflare Pages 只托管静态文件。
+纯前端网页应用。视频不会上传服务器，WebAV / FFmpeg 在浏览器中本地运行。Cloudflare 只托管静态文件。
+
+网站地址：**https://watermarker.kdhr.workers.dev/**
 
 支持 **多线程加速**（需要浏览器支持 SharedArrayBuffer），不支持时自动回退单线程。
 
@@ -19,7 +21,7 @@ logoadder/
 ├── scripts/
 │   └── copy-ffmpeg-core.mjs # 构建前复制 FFmpeg 核心文件
 ├── vite.config.js          # Vite 配置
-├── wrangler.toml           # Cloudflare Pages 配置
+├── wrangler.toml           # Cloudflare Workers 静态资源配置
 └── package.json
 ```
 
@@ -34,7 +36,19 @@ npm install
 npm run dev
 ```
 
-## 部署到 Cloudflare Pages
+## 部署到 Cloudflare Workers（当前网站）
+
+`wrangler.toml` 已配置 Worker 名称 `watermarker` 和静态资源目录 `dist`：
+
+```powershell
+npm install
+npm run build
+npx wrangler deploy --keep-vars
+```
+
+使用 Cloudflare 中配置了 `kdhr.workers.dev` 子域名的账号部署，网址为 `https://watermarker.kdhr.workers.dev/`。账号子域名在 Cloudflare Dashboard 的 **Workers 和 Pages → Your subdomain → Change** 中设置，不由本地配置文件决定。
+
+## 部署到 Cloudflare Pages（可选）
 
 ### 方式一：GitHub 自动部署（推荐）
 
